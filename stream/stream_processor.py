@@ -1,4 +1,5 @@
 import logging
+import redis
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, expr
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType, LongType
@@ -6,6 +7,10 @@ from pyspark.sql.types import StructType, StructField, StringType, ArrayType, Lo
 # --- Configuration ---
 KAFKA_BOOTSTRAP_SERVERS = "kafka:29092"
 TOPIC = "order_book"
+
+# Redis Config (Internal Docker Hostname)
+REDIS_HOST = "redis"
+REDIS_PORT = 6379
 
 # Schema matches the data sent by your Producer
 # Example: {"s": "BTCUSDT", "bids": [["90000", "0.5"], ...], "asks": [...], "ingest_ts": 173...}
@@ -16,6 +21,40 @@ schema = StructType([
     StructField("asks", ArrayType(ArrayType(StringType()))),
     StructField("ingest_ts", LongType())
 ])
+
+def write_to_redis(batch_df, batch_id):
+    """
+    This function runs on the Spark Driver for every micro-batch.
+    Since OBI data is small (10 rows), we can collect it to the driver 
+    and write to Redis efficiently using a Pipeline.
+    """
+    # 1. Check if batch is empty
+    if batch_df.isEmpty():
+        return
+        
+    # 2. Collect data to Driver (Valid for small summary data like this)
+    rows = batch_df.collect()
+    
+    # 3. Connect to Redis
+    try:
+        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
+        pipe = r.pipeline()
+        
+        # 4. Loop through rows and queue Redis commands
+        print(f"💾 Writing Batch {batch_id} to Redis ({len(rows)} symbols)...")
+        for row in rows:
+            symbol = row['symbol']
+            obi = row['OBI']
+            
+            # Store in a Hash Map: Key="market_metrics", Field=Symbol, Value=OBI
+            pipe.hset("market_metrics", symbol, str(obi))
+            print("symbol: "+symbol+" obi: "+str(obi))
+            
+        # 5. Execute all writes at once
+        pipe.execute()
+        
+    except Exception as e:
+        print(f"❌ Redis Error: {e}")
 
 def run_processor():
     # 1. Initialize Spark Session
@@ -61,14 +100,15 @@ def run_processor():
         (col("bid_vol") - col("ask_vol")) / (col("bid_vol") + col("ask_vol"))
     )
 
-    # 5. Output to Console 
+    # --- WRITING TO REDIS ---
+    # Instead of format("console"), we use foreachBatch(write_to_redis)
     query = obi_df.writeStream \
-        .outputMode("append") \
-        .format("console") \
-        .option("truncate", "false") \
+        .outputMode("update") \
+        .foreachBatch(write_to_redis) \
         .start()
-
+    
     query.awaitTermination()
+
 
 if __name__ == "__main__":
     run_processor()
