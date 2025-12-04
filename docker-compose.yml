@@ -45,6 +45,10 @@ services:
       - "8081:8081"
     volumes:
       - ./:/app
+    environment:
+      # "Vertical Scaling": We simulate a powerful server with 15 cores
+      - SPARK_WORKER_CORES=15
+      - SPARK_WORKER_MEMORY=2G
 
   spark-worker-2:
     image: apache/spark:3.5.0
@@ -56,6 +60,10 @@ services:
       - "8082:8081"
     volumes:
       - ./:/app
+    environment:
+      # "Vertical Scaling": We simulate a powerful server with 15 cores
+      - SPARK_WORKER_CORES=15
+      - SPARK_WORKER_MEMORY=2G
 
   redis:
     image: redis:7-alpine

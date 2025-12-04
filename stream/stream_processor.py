@@ -1,5 +1,6 @@
 import logging
 import redis
+import time
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, expr
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType, LongType
@@ -31,27 +32,52 @@ def write_to_redis(batch_df, batch_id):
     # 1. Check if batch is empty
     if batch_df.isEmpty():
         return
+    
+    proc_start = time.time()
         
     # 2. Collect data to Driver (Valid for small summary data like this)
     rows = batch_df.collect()
     
+
+    current_time_ms = int(time.time() * 1000)
+
     # 3. Connect to Redis
     try:
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
         pipe = r.pipeline()
+        
+        total_lag = 0
+        count = 0
         
         # 4. Loop through rows and queue Redis commands
         print(f"💾 Writing Batch {batch_id} to Redis ({len(rows)} symbols)...")
         for row in rows:
             symbol = row['symbol']
             obi = row['OBI']
+
+            ingest_ts = row['ingest_ts']
+
+            lag = current_time_ms - ingest_ts
+
+            if lag < 0: lag = 0
+
+            total_lag += lag
+            count += 1
             
             # Store in a Hash Map: Key="market_metrics", Field=Symbol, Value=OBI
             pipe.hset("market_metrics", symbol, str(obi))
             print("symbol: "+symbol+" obi: "+str(obi))
-            
-        # 5. Execute all writes at once
+        
+
+        avg_lag = total_lag / count if count > 0 else 0
+        
+        pipe.hset("system_metrics", "avg_latency_ms", str(int(avg_lag)))
+        pipe.hset("system_metrics", "processed_count", str(count))
+        pipe.hset("system_metrics", "last_updated", str(current_time_ms))
+        
         pipe.execute()
+        
+        print(f"⚡ Batch {batch_id} | processed: {count} | avg_lag: {int(avg_lag)}ms")
         
     except Exception as e:
         print(f"❌ Redis Error: {e}")
@@ -78,7 +104,7 @@ def run_processor():
         from_json(col("value").cast("string"), schema).alias("data")
     ).select(
         col("data.s").alias("symbol"),
-        (col("data.ingest_ts") / 1000).cast("timestamp").alias("timestamp"),
+        col("data.ingest_ts").alias("ingest_ts"),
         col("data.bids"),
         col("data.asks")
     )
@@ -92,7 +118,7 @@ def run_processor():
     
     obi_df = parsed_df.select(
         col("symbol"),
-        col("timestamp"),
+        col("ingest_ts"),
         expr("aggregate(transform(bids, x -> cast(x[1] as double)), 0.0D, (acc, x) -> acc + x)").alias("bid_vol"),
         expr("aggregate(transform(asks, x -> cast(x[1] as double)), 0.0D, (acc, x) -> acc + x)").alias("ask_vol")
     ).withColumn(

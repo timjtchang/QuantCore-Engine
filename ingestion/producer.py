@@ -13,7 +13,13 @@ KAFKA_CONF = {
     'queue.buffering.max.ms': 10, 
 }
 
-SYMBOLS = ["btcusdt", "ethusdt", "solusdt", "bnbusdt", "adausdt", "xrpusdt", "dotusdt", "dogeusdt", "avaxusdt", "maticusdt"]
+SYMBOLS = [
+    "btcusdt", "ethusdt", "bnbusdt", "solusdt", "xrpusdt", "adausdt", 
+    "dogeusdt", "avaxusdt", "dotusdt", "maticusdt", "shibusdt", "ltcusdt", 
+    "trxusdt", "uniusdt", "linkusdt", "xlmusdt", "atomusdt", "xmrusdt", 
+    "etcusdt", "bchusdt", "filusdt", "nearusdt", "vetusdt", "algousdt", 
+    "qntusdt", "icpusdt", "grtusdt", "ftmusdt", "sandusdt", "aaveusdt"
+]
 
 logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.INFO)
 
