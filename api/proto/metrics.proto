@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package quantcore;
+option go_package = "./proto";
+
+// The Request (Empty because the client just wants to listen)
+message SubscribeRequest {}
+
+// The Response (A single update containing the list of scores)
+message MarketUpdate {
+  int64 timestamp = 1;
+  repeated Metric data = 2;
+}
+
+message Metric {
+  string symbol = 1;
+  string obi = 2;
+}
+
+// The Service Definition
+service MarketDataService {
+  // SERVER-SIDE STREAMING: One request, many responses
+  rpc SubscribeToMetrics (SubscribeRequest) returns (stream MarketUpdate);
+}
