@@ -24,7 +24,6 @@ class OrderBookProducer:
         self.running = True
     
     def _build_stream_url(self):
-        # Combined Stream URL
         streams = "/".join([f"{s}@depth5@100ms" for s in SYMBOLS])
         return f"wss://stream.binance.us:9443/stream?streams={streams}"
 
@@ -52,11 +51,10 @@ class OrderBookProducer:
                     data = response['data']
                     stream_name = response['stream'] # e.g., "btcusdt@depth5@100ms"
                     
-                    # 2. CRITICAL FIX: Extract Symbol from Stream Name
                     # "btcusdt@depth5@100ms" -> "BTCUSDT"
                     symbol = stream_name.split('@')[0].upper()
                     
-                    # 3. Inject Symbol into Data (Spark needs this!)
+                    # 3. Inject Symbol into Data
                     data['s'] = symbol
                     data['ingest_ts'] = int(time.time() * 1000)
                     
