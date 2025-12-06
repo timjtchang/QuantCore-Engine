@@ -17,6 +17,9 @@ The system implements a **CQRS Pattern** to decouple high-throughput computation
 - **High-Performance Ingestion:** Python producer multiplexes 30+ WebSocket streams into a single connection, sharding data into **Kafka Partitions** to guarantee strict ordering per symbol.
 - **gRPC Streaming API:** Go server pushes updates to clients via **HTTP/2** server-side streaming, reducing network overhead compared to REST polling.
 - **Fault Tolerance:** Fully containerized environment with Zookeeper-managed Kafka brokers and auto-healing Spark workers.
+- **Cloud-Native Deployment:** Fully automated deployment to AWS EC2 using Terraform, with self-healing Docker container orchestration.
+
+![Demo](demo/demo.gif)
 
 ---
 
@@ -26,7 +29,7 @@ The system implements a **CQRS Pattern** to decouple high-throughput computation
 DATA SOURCE         INGESTION LAYER          BUFFER LAYER
 +-------------+     +------------------+     +----------------------+
 | Binance WS  | --> | Python Producer  | --> | Apache Kafka         |
-| (L2 Depth)  |     | (Multiplexer)    |     | (30 Partitions)      |
+| (L2 Depth)  |     | (Multiplexer x10)|     | (30 Partitions)      |
 +-------------+     +------------------+     +----------------------+
                                                         |
                                                         v
@@ -71,15 +74,24 @@ Unlike batch-based architectures, QuantCore treats the live data stream as the p
 - **Continuous Intelligence:** Metrics are calculated incrementally on the fly using **Spark Structured Streaming**, eliminating the need for nightly batch jobs.
 - **State Management:** The system maintains the "Current State of the Market" in memory, rather than storing a historical archive on disk.
 
----
+### 3. Infrastructure as Code (IaC)
+
+The entire production environment is provisioned automatically using **Terraform**.
+
+- **Dynamic Provisioning:** Automates the creation of AWS EC2 instances (`m5.xlarge`) and security groups.
+- **Bootstrap Strategy:** Uses `user_data` scripts to install Docker, clone the repository, and launch the distributed cluster on boot, ensuring reproducible deployments.
+- ***
 
 ## ⚙️ Deep Dive: Distributed Parallelism
 
 One of the core engineering challenges in HFT is processing massive data volumes without losing the strict chronological order of trades. QuantCore solves this using a **Partition-Aware Streaming Strategy** scaled for the Top 30 market assets.
 
-### 1. The Router (Python Producer)
+### 1. Horizontal Ingestion Sharding
 
-The Ingestion service acts as a semantic router. It tags every incoming Order Book update with a **Partition Key** equal to its Symbol (e.g., `key="BTCUSDT"`).
+To overcome the Global Interpreter Lock (GIL) and WebSocket limits of a single Python process, the ingestion layer is horizontally scaled.
+
+- **Sharding Strategy:** The system launches **10 parallel producer instances**, each responsible for a distinct slice of the symbol universe (e.g., Shard 0 handles BTC/ETH, Shard 1 handles SOL/ADA).
+- **Concurrency:** This enables parallel network I/O and JSON parsing across multiple CPU cores before data even reaches Kafka.
 
 ### 2. The Buffer Lanes (30 Kafka Partitions)
 
@@ -122,13 +134,15 @@ Acts as the **Shock Absorber** between the volatile data source (Binance) and th
 
 ---
 
-## 🛠️ Installation & Setup
+## 🛠️ Installation & Setup (local)
 
 ### Prerequisites
 
 - Docker & Docker Compose
 - Go 1.21+
 - Python 3.11+
+- Terraform
+- AWS CLI (configured)
 
 ### 1. Start Infrastructure
 
@@ -195,6 +209,43 @@ go run client/main.go
 
 ---
 
+## 🛠️ Installation & Setup (Cloud)
+
+### Option B: Cloud Deployment (AWS + Terraform)
+
+Deploy the entire stack to a dedicated AWS EC2 instance automatically.
+
+1. **Initialize Terraform:**
+
+   ```bash
+   cd infra
+   terraform init
+   ```
+
+2. **Deploy Infrastructure:**
+
+   ```bash
+   terraform apply
+   ```
+
+   _(This provisions an `m5.xlarge` instance, installs Docker, clones the repo, and starts the cluster via User Data scripts.)_
+
+3. **Start Ingestion (Sharded):**
+   Use the helper script to launch 10 parallel producers.
+
+   ```bash
+   # Inside the server or local machine
+   cd ingestion
+   ./run.sh
+   ```
+
+4. **Teardown:**
+   ```bash
+   terraform destroy
+   ```
+
+---
+
 ## 📂 File Structure
 
 ```text
@@ -203,13 +254,15 @@ go run client/main.go
 │   ├── client/                 # Test gRPC Client
 │   ├── proto/                  # Protobuf Contracts
 │   ├── main.go                 # Server Entrypoint
-│   ├── go.mod                  # Go Module Definition
-│   └── go.sum                  # Dependency Checksums
+├── infra/                      # Infrastructure as Code
+│   └── main.tf                 # Terraform AWS Definition
 ├── ingestion/                  # Ingestion Layer (Python)
 │   └── producer.py             # Binance WebSocket -> Kafka
+│   └── run.sh                  # Helper script to launch sharded producers
 ├── stream/                     # Compute Layer (PySpark)
 │   └── stream_processor.py     # Kafka -> OBI Math -> Redis
-├── docker-compose.yml          # Infrastructure Orchestration
+├── docker-compose.yml          # Local Orchestration
+├── Dockerfile                  # Custom Spark Image with Dependencies
 ├── requirements.txt            # Python Dependencies
 └── README.md                   # System Documentation
 ```
