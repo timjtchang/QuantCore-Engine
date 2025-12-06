@@ -1,6 +1,8 @@
 import json
 import time
 import logging
+import os
+import math
 from websocket import create_connection, WebSocketConnectionClosedException
 from confluent_kafka import Producer
 
@@ -8,7 +10,7 @@ from confluent_kafka import Producer
 KAFKA_TOPIC = "order_book"
 KAFKA_CONF = {
     'bootstrap.servers': 'localhost:9092', 
-    'client.id': 'quantcore-producer',
+    'client.id': 'quantcore-producer-{os.getenv("SHARD_ID", "0")',
     'queue.buffering.max.messages': 100000, 
     'queue.buffering.max.ms': 10, 
 }
@@ -22,6 +24,31 @@ SYMBOLS = [
 ]
 
 logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=logging.INFO)
+
+def get_my_symbols():
+    
+    try:
+        shard_id = int(os.getenv("SHARD_ID", "0"))       # 0, 1, 2
+        total_shards = int(os.getenv("TOTAL_SHARDS", "1")) # 3
+    except ValueError:
+        shard_id = 0
+        total_shards = 1
+
+    chunk_size = math.ceil(len(SYMBOLS) / total_shards)
+    
+    start_index = shard_id * chunk_size
+    end_index = start_index + chunk_size
+
+    my_symbols = SYMBOLS[start_index:end_index]
+    
+    print(f"🤖 Producer Shard {shard_id + 1}/{total_shards} initialized.")
+    print(f"📋 Handling {len(my_symbols)} symbols: {my_symbols}")
+    
+    if not my_symbols:
+        print("⚠️ Warning: This shard has no symbols assigned!")
+        
+    return my_symbols
+
 
 class OrderBookProducer:
     def __init__(self):
