@@ -30,6 +30,9 @@ def get_my_symbols():
     try:
         shard_id = int(os.getenv("SHARD_ID", "0"))       # 0, 1, 2
         total_shards = int(os.getenv("TOTAL_SHARDS", "1")) # 3
+        print(shard_id)
+        print(total_shards)
+
     except ValueError:
         shard_id = 0
         total_shards = 1
@@ -53,11 +56,13 @@ def get_my_symbols():
 class OrderBookProducer:
     def __init__(self):
         self.producer = Producer(KAFKA_CONF)
+        self.symbols = get_my_symbols()
         self.url = self._build_stream_url()
         self.running = True
+
     
     def _build_stream_url(self):
-        streams = "/".join([f"{s}@depth5@100ms" for s in SYMBOLS])
+        streams = "/".join([f"{s}@depth5@100ms" for s in self.symbols])
         return f"wss://stream.binance.us:9443/stream?streams={streams}"
 
     def delivery_report(self, err, msg):
