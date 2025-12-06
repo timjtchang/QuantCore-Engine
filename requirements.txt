@@ -1,3 +1,8 @@
-confluent-kafka==2.3.0
-websocket-client==1.6.1
-simplejson==3.19.1
+# For the Ingestion Service (Producer)
+websocket-client>=1.6.1   # Provides: from websocket import create_connection
+confluent-kafka>=2.3.0    # Provides: from confluent_kafka import Producer
+simplejson>=3.19.1        # Recommended: faster json parsing (optional but good practice)
+
+# For the Stream Processor (Spark)
+redis>=5.0.1              # Provides: import redis
+pyspark>=3.5.0            # Provides: from pyspark.sql...
