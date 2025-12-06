@@ -62,7 +62,7 @@ class OrderBookProducer:
 
     
     def _build_stream_url(self):
-        streams = "/".join([f"{s}@depth5@100ms" for s in self.symbols])
+        streams = "/".join([f"{s}@depth20@100ms" for s in self.symbols])
         return f"wss://stream.binance.us:9443/stream?streams={streams}"
 
     def delivery_report(self, err, msg):
