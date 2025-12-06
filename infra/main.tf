@@ -89,10 +89,18 @@ resource "aws_instance" "quantcore_server" {
               #!/bin/bash
               echo "Installing Docker..."
               apt-get update
-              apt-get install -y docker.io docker-compose git
+              apt-get install -y docker.io docker-compose git python3-pip
               systemctl start docker
               systemctl enable docker
               usermod -aG docker ubuntu
+
+              echo "Install python dependencies"
+
+              sudo apt install python3-pip
+              pip3 install --no-cache-dir \
+                  --only-binary :all: \
+                  confluent-kafka simplejson websocket-client redis
+
 
               echo "Cloning Repo..."
               git clone https://github.com/timjtchang/QuantCore-Engine.git /home/ubuntu/quantcore
@@ -101,9 +109,12 @@ resource "aws_instance" "quantcore_server" {
               cd /home/ubuntu/quantcore
               docker-compose up -d
 
-              sudo apt install python3-pip
-              pip install --no-cache-dir --only-binary :all: confluent-kafka simplejson websocket-client redis
-              
+              echo "Setting up kafak..."
+              sudo docker exec -it kafka kafka-topics --create \
+                --topic order_book \
+                --bootstrap-server localhost:9092 \
+                --partitions 30 \
+                --replication-factor 1
               
               EOF
 }
