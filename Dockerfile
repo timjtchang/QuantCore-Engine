@@ -16,7 +16,7 @@ COPY requirements.txt /app/requirements.txt
 # 3. Install Python libraries
 # --no-cache-dir keeps the image small
 # --break-system-packages is needed on newer Debian/Ubuntu versions to allow pip to write to /usr/lib
-RUN pip3 install --no-cache-dir -r /app/requirements.txt --break-system-packages
+RUN pip3 install --no-cache-dir -r /app/requirements.txt 
 
 # Switch back to default user for security
 USER spark
