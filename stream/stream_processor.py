@@ -18,8 +18,8 @@ REDIS_PORT = 6379
 schema = StructType([
     StructField("s", StringType()),
     # Bids/Asks are Arrays of Arrays: [ ["Price", "Qty"], ["Price", "Qty"] ]
-    StructField("bids", ArrayType(ArrayType(StringType()))),
-    StructField("asks", ArrayType(ArrayType(StringType()))),
+    StructField("b", ArrayType(ArrayType(StringType()))),
+    StructField("a", ArrayType(ArrayType(StringType()))),
     StructField("ingest_ts", LongType())
 ])
 
@@ -105,8 +105,8 @@ def run_processor():
     ).select(
         col("data.s").alias("symbol"),
         col("data.ingest_ts").alias("ingest_ts"),
-        col("data.bids"),
-        col("data.asks")
+        col("data.b").alias("bids"),
+        col("data.a").alias("asks"),
     )
 
     # 4. The "Quant" Logic (OBI Calculation)

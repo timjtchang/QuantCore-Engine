@@ -62,8 +62,8 @@ class OrderBookProducer:
 
     
     def _build_stream_url(self):
-        streams = "/".join([f"{s}@depth20@100ms" for s in self.symbols])
-        return f"wss://stream.binance.us:9443/stream?streams={streams}"
+        streams = "/".join(f"{s.lower()}@depth20@100ms" for s in self.symbols)
+        return f"wss://fstream.binance.com/stream?streams={streams}"
 
     def delivery_report(self, err, msg):
         if err is not None:
