@@ -41,6 +41,17 @@ def write_to_redis(batch_df, batch_id):
 
     current_time_ms = int(time.time() * 1000)
 
+    mp = {}
+
+    for row in rows:
+        symbol = row['symbol']
+        obi = row['OBI']
+        ts = row['ingest_ts']
+
+        if symbol not in mp or mp[symbol][1]<ts:
+            mp[symbol] = (obi, ts)
+
+
     # 3. Connect to Redis
     try:
         r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0)
@@ -51,11 +62,7 @@ def write_to_redis(batch_df, batch_id):
         
         # 4. Loop through rows and queue Redis commands
         print(f"💾 Writing Batch {batch_id} to Redis ({len(rows)} symbols)...")
-        for row in rows:
-            symbol = row['symbol']
-            obi = row['OBI']
-
-            ingest_ts = row['ingest_ts']
+        for symbol, (obi, ingest_ts) in mp.items():
 
             lag = current_time_ms - ingest_ts
 
