@@ -1,6 +1,7 @@
 import logging
 import redis
 import time
+import json
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col, expr
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType, LongType
@@ -71,9 +72,17 @@ def write_to_redis(batch_df, batch_id):
             total_lag += lag
             count += 1
             
-            # Store in a Hash Map: Key="market_metrics", Field=Symbol, Value=OBI
-            pipe.hset("market_metrics", symbol, str(obi))
+            payload = f"{obi}:{ingest_ts}"
+            pipe.hset("market_metrics", symbol, payload)
             print("symbol: "+symbol+" obi: "+str(obi))
+
+            pubsub_message = {
+                "symbol": symbol,
+                "obi": str(obi),
+                "update": str(ingest_ts)
+            }
+            pipe.publish("market_updates_channel", json.dumps(pubsub_message))
+ 
         
 
         avg_lag = total_lag / count if count > 0 else 0

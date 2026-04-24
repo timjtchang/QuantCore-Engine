@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log"
+	"os"
+	"time"
 
 	pb "github.com/timjtchang/quantcore/proto"
 	"google.golang.org/grpc"
@@ -19,6 +21,15 @@ func main() {
 	defer conn.Close()
 	
 	client := pb.NewMarketDataServiceClient(conn)
+
+	logFile, err := os.OpenFile("market_stream.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+    if err != nil {
+        log.Fatalf("Failed to open log file: %v", err)
+    }
+    defer logFile.Close()
+
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+    log.SetOutput(multiWriter)
 
 	// 2. Open the Stream
 	stream, err := client.SubscribeToMetrics(context.Background(), &pb.SubscribeRequest{})
@@ -38,9 +49,10 @@ func main() {
 			log.Fatalf("Stream error: %v", err)
 		}
 
-		log.Printf("--- Update at %d ---", msg.Timestamp)
+		now := time.Now()
+		log.Printf("--- Current %d ---", now.UnixMilli() )
 		for _, m := range msg.Data {
-			log.Printf("[%s] OBI: %s", m.Symbol, m.Obi)
+			log.Printf("[%s] OBI: %s | Updated: %s", m.Symbol, m.Obi, m.Update)
 		}
 	}
 }
