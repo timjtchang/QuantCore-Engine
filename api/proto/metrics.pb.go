@@ -116,6 +116,7 @@ type Metric struct {
 	Symbol        string                 `protobuf:"bytes,1,opt,name=symbol,proto3" json:"symbol,omitempty"`
 	Obi           string                 `protobuf:"bytes,2,opt,name=obi,proto3" json:"obi,omitempty"`
 	Update        string                 `protobuf:"bytes,3,opt,name=update,proto3" json:"update,omitempty"`
+	ProcessTs     string                 `protobuf:"bytes,4,opt,name=process_ts,json=processTs,proto3" json:"process_ts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -171,6 +172,13 @@ func (x *Metric) GetUpdate() string {
 	return ""
 }
 
+func (x *Metric) GetProcessTs() string {
+	if x != nil {
+		return x.ProcessTs
+	}
+	return ""
+}
+
 var File_proto_metrics_proto protoreflect.FileDescriptor
 
 const file_proto_metrics_proto_rawDesc = "" +
@@ -179,11 +187,13 @@ const file_proto_metrics_proto_rawDesc = "" +
 	"\x10SubscribeRequest\"S\n" +
 	"\fMarketUpdate\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12%\n" +
-	"\x04data\x18\x02 \x03(\v2\x11.quantcore.MetricR\x04data\"J\n" +
+	"\x04data\x18\x02 \x03(\v2\x11.quantcore.MetricR\x04data\"i\n" +
 	"\x06Metric\x12\x16\n" +
 	"\x06symbol\x18\x01 \x01(\tR\x06symbol\x12\x10\n" +
 	"\x03obi\x18\x02 \x01(\tR\x03obi\x12\x16\n" +
-	"\x06update\x18\x03 \x01(\tR\x06update2a\n" +
+	"\x06update\x18\x03 \x01(\tR\x06update\x12\x1d\n" +
+	"\n" +
+	"process_ts\x18\x04 \x01(\tR\tprocessTs2a\n" +
 	"\x11MarketDataService\x12L\n" +
 	"\x12SubscribeToMetrics\x12\x1b.quantcore.SubscribeRequest\x1a\x17.quantcore.MarketUpdate0\x01B\tZ\a./protob\x06proto3"
 

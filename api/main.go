@@ -1,9 +1,10 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"log"
-	"net" // don't forget to import this
+	"net"
+	"strings" // don't forget to import this
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -24,51 +25,55 @@ type server struct {
 	rdb *redis.Client
 }
 
-type MarketTick struct {
-    Symbol string `json:"symbol"`
-    Obi    string `json:"obi"`
-    Update string `json:"update"`
-}
-
 // The Streaming Implementation
 func (s *server) SubscribeToMetrics(req *pb.SubscribeRequest, stream pb.MarketDataService_SubscribeToMetricsServer) error {
-    log.Println("🎧 New Client Connected! Starting Redis Pub/Sub stream...")
+	log.Println("🎧 New Client Connected to Stream!")
 
-    pubsub := s.rdb.Subscribe(stream.Context(), "market_updates_channel")
-    defer pubsub.Close()
-
-    ch := pubsub.Channel()
-
-    for msg := range ch {
-        // 1. Unmarshal directly into the struct
-		var tick MarketTick
-		if err := json.Unmarshal([]byte(msg.Payload), &tick); err != nil {
-			log.Printf("⚠️ Failed to parse payload: %v", err)
-			continue 
+	// Loop forever (or until client disconnects)
+	for {
+		// 1. Fetch Data from Redis
+		result, err := s.rdb.HGetAll(context.Background(), "market_metrics").Result()
+		if err != nil {
+			log.Printf("Redis Error: %v", err)
+			time.Sleep(1 * time.Second)
+			continue
 		}
 
-		// 2. Map it to the gRPC Proto format
-		// Since we only get one symbol per Pub/Sub message, the array only has 1 item
-		metrics := []*pb.Metric{
-			{
-				Symbol: tick.Symbol,
-				Obi:    tick.Obi,
-				Update: tick.Update,
-			},
+		// 2. Convert to Proto format
+		var metrics []*pb.Metric
+		for sym, rawVal := range result {
+			parts := strings.Split(rawVal, ":")
+			
+			// SAFETY CHECK: Prevent index out of bounds panic
+			if len(parts) != 3 {
+				log.Printf("⚠️ Warning: Malformed data for %s: %s", sym, rawVal)
+				continue 
+			}
+
+			print(parts)
+
+			metrics = append(metrics, &pb.Metric{
+				Symbol: sym,
+				Obi:    parts[0],
+				Update: parts[1],
+				ProcessTs: parts[2],
+			})
 		}
 
-        response := &pb.MarketUpdate{
-            Timestamp: time.Now().UnixMilli(),
-            Data:      metrics,
-        }
+		// 3. Send the message down the stream
+		response := &pb.MarketUpdate{
+			Timestamp: time.Now().UnixMilli(),
+			Data:      metrics,
+		}
 
-        if err := stream.Send(response); err != nil {
-            log.Printf("❌ Client Disconnected or Network Error: %v", err)
-            return err 
-        }
-    }
+		if err := stream.Send(response); err != nil {
+			log.Printf("❌ Client Disconnected: %v", err)
+			return err
+		}
 
-    return nil
+		// 4. Wait before next push (Simulate Ticker)
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func main() {

@@ -4,3 +4,4 @@ infra/.ssh
 infra/.terraform.*
 infra/terraform.*
 infra/.terraform/
+*.log
