@@ -52,7 +52,7 @@ func main() {
 		now := time.Now()
 		log.Printf("--- Current %d ---", now.UnixMilli() )
 		for _, m := range msg.Data {
-			log.Printf("[%s] OBI: %s | Updated: %s", m.Symbol, m.Obi, m.Update)
+			log.Printf("[%s] OBI: %s | Updated: %s | ProcessTs: %s", m.Symbol, m.Obi, m.Update, m.ProcessTs)
 		}
 	}
 }

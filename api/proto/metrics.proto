@@ -16,6 +16,7 @@ message Metric {
   string symbol = 1;
   string obi = 2;
   string update = 3;
+  string process_ts = 4;
 }
 
 // The Service Definition

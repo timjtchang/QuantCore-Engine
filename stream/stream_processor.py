@@ -79,7 +79,8 @@ def write_to_redis(batch_df, batch_id):
             pubsub_message = {
                 "symbol": symbol,
                 "obi": str(obi),
-                "update": str(ingest_ts)
+                "update": str(ingest_ts),
+                "process_ts": str(current_time_ms)  # ← 新增（Spark 寫完時間）
             }
             pipe.publish("market_updates_channel", json.dumps(pubsub_message))
  

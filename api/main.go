@@ -28,6 +28,7 @@ type MarketTick struct {
     Symbol string `json:"symbol"`
     Obi    string `json:"obi"`
     Update string `json:"update"`
+	ProcessTs string `json:"process_ts"`
 }
 
 // The Streaming Implementation
@@ -51,9 +52,10 @@ func (s *server) SubscribeToMetrics(req *pb.SubscribeRequest, stream pb.MarketDa
 		// Since we only get one symbol per Pub/Sub message, the array only has 1 item
 		metrics := []*pb.Metric{
 			{
-				Symbol: tick.Symbol,
-				Obi:    tick.Obi,
-				Update: tick.Update,
+				Symbol:    tick.Symbol,
+				Obi:       tick.Obi,
+				Update:    tick.Update,
+				ProcessTs: tick.ProcessTs,
 			},
 		}
 
