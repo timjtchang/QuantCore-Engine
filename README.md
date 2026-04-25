@@ -4,20 +4,21 @@
 
 ![Go](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go) ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python) ![Apache Kafka](https://img.shields.io/badge/Apache_Kafka-3.5-231F20?logo=apachekafka) ![Apache Spark](https://img.shields.io/badge/Apache_Spark-3.5-E25A1C?logo=apachespark) ![Redis](https://img.shields.io/badge/Redis-7.0-DC382D?logo=redis) ![gRPC](https://img.shields.io/badge/gRPC-HTTP%2F2-4285F4?logo=google)
 
-**QuantCore Engine** is a high-frequency trading (HFT) data pipeline designed to ingest, process, and serve **real-time** market microstructure signals. It calculates **Order Book Imbalance (OBI)** for the **Top 30 crypto assets** with sub-second end-to-end latency.
+**QuantCore Engine** is a streaming data pipeline that ingests, processes, and serves **real-time** market microstructure signals. It calculates **Order Book Imbalance (OBI)** for the **Top 30 crypto assets** with sub-second end-to-end latency.
 
-The system implements a **CQRS Pattern** to decouple high-throughput computation from low-latency serving, using a **Kappa-style** streaming architecture where the data stream is the single source of truth.
+The system uses a **Kappa-style architecture** where Kafka is the single source of truth, with a **Speed Layer + Serving Layer** separation: Spark handles high-throughput stream computation, while Redis + a Go gRPC server deliver low-latency event-driven push to clients.
 
 ---
 
 ## 🚀 Key Features
 
-- **Real-Time Market Microstructure:** Calculates **Order Book Imbalance (OBI)** ($\frac{V_b - V_a}{V_b + V_a}$) to predict short-term price pressure using L2 Depth data.
-- **Distributed Stream Processing:** Utilizes **Apache Spark Structured Streaming** to process nested JSON arrays of Order Books using vectorized higher-order functions.
-- **High-Performance Ingestion:** Python producer multiplexes 30+ WebSocket streams into a single connection, sharding data into **Kafka Partitions** to guarantee strict ordering per symbol.
-- **gRPC Streaming API:** Go server pushes updates to clients via **HTTP/2** server-side streaming, reducing network overhead compared to REST polling.
-- **Fault Tolerance:** Fully containerized environment with Zookeeper-managed Kafka brokers and auto-healing Spark workers.
-- **Cloud-Native Deployment:** Fully automated deployment to AWS EC2 using Terraform, with self-healing Docker container orchestration.
+- **Real-Time Market Microstructure**: Computes **Order Book Imbalance (OBI)** ($\frac{V_b - V_a}{V_b + V_a}$) on L2 depth snapshots to predict short-term price pressure.
+- **Distributed Stream Processing**: **Apache Spark Structured Streaming** processes nested order book arrays using vectorized **Higher-Order Functions** (`aggregate` + `transform`) to avoid shuffle.
+- **Driver-Side Dedup Optimization**: Driver-side Python dict dedup bypasses Spark shuffle entirely, reducing Redis writes per batch by **76% (108 → 26 rows)** over 10K+ batches.
+- **Sharded Ingestion**: Python producer is horizontally sharded into **10 parallel processes**, each subscribing to a slice of the symbol universe to overcome single-WebSocket subscription limits.
+- **Event-Driven gRPC Streaming**: Go server uses **Redis Pub/Sub** to push updates over **HTTP/2 server-side streaming**, eliminating polling staleness — server-side latency p50 dropped from **321ms → 5ms (-98%)** vs the polling baseline.
+- **Protobuf Encoding**: Reduces application payload size by **46% (1169B → 630B)** vs JSON, measured on a 30-symbol `MarketUpdate` message.
+- **Cloud-Native Deployment**: Fully provisioned to AWS EC2 via **Terraform** with `user_data` bootstrap.
 
 ![Demo](demo/demo.gif)
 
@@ -29,23 +30,27 @@ The system implements a **CQRS Pattern** to decouple high-throughput computation
 DATA SOURCE         INGESTION LAYER          BUFFER LAYER
 +-------------+     +------------------+     +----------------------+
 | Binance WS  | --> | Python Producer  | --> | Apache Kafka         |
-| (L2 Depth)  |     | (Multiplexer x10)|     | (30 Partitions)      |
+| (L2 Depth)  |     | (10 Sharded Procs)|    | (30 Partitions)      |
 +-------------+     +------------------+     +----------------------+
                                                         |
                                                         v
                                              COMPUTE LAYER (WRITE)
-                                             +----------------------+
-                                             | Apache Spark Cluster |
-                                             | (Structured Stream)  |
-                                             | - Calculate OBI      |
-                                             | - Measure Latency    |
-                                             +----------------------+
+                                             +-----------------------+
+                                             | Apache Spark Cluster  |
+                                             | (Structured Stream)   |
+                                             | - OBI via HOF (no     |
+                                             |   shuffle)            |
+                                             | - Driver-side dict    |
+                                             |   dedup               |
+                                             +-----------------------+
                                                         |
+                                          HSET + PUBLISH (atomic pipeline)
                                                         v
 SERVING LAYER (READ)                         STORAGE LAYER
-+----------------------+     gRPC / HTTP2    +----------------------+
++----------------------+   gRPC (HTTP/2)     +----------------------+
 | Go gRPC API Server   | <------------------ | Redis (In-Memory)    |
-| (Streaming Response) |       HGETALL       | (Live Scoreboard)    |
+| (Server Streaming)   |   SUBSCRIBE         | - market_metrics     |
+|                      |   (Pub/Sub)         | - market_updates ch  |
 +----------------------+                     +----------------------+
            |
            v
@@ -59,82 +64,116 @@ SERVING LAYER (READ)                         STORAGE LAYER
 
 ## 📐 Architectural Patterns
 
-### 1. CQRS (Command Query Responsibility Segregation)
+### 1. Kappa Architecture (Stream-First)
 
-The system strictly separates the **Write Model** (Ingestion/Compute) from the **Read Model** (Serving) to optimize for conflicting requirements.
+The system treats the live data stream as the primary system of record, eliminating the need for batch reconciliation.
 
-- **Command Side (Write):** Handles high-throughput math (18,000+ events/min) using Spark. Optimized for **Throughput**.
-- **Query Side (Read):** Handles client requests using Go/Redis. Optimized for **Latency**.
-- **The Bridge:** Redis acts as the materialized view, allowing the Go API to serve data in microseconds without being blocked by the heavy computational load of the Spark engine.
+- **Single Source of Truth**: Kafka is an immutable event log. Historical reprocessing is achieved by spawning a new consumer group from `offset 0`.
+- **Continuous Computation**: Spark Structured Streaming incrementally computes metrics in micro-batches. No nightly batch jobs required.
+- **State Management**: Redis maintains the current market state as a materialized view, decoupling read latency from write throughput.
 
-### 2. Stream-First Processing (Kappa)
+### 2. Speed Layer + Serving Layer Separation
 
-Unlike batch-based architectures, QuantCore treats the live data stream as the primary system of record.
+The system separates high-throughput computation from low-latency serving:
 
-- **Continuous Intelligence:** Metrics are calculated incrementally on the fly using **Spark Structured Streaming**, eliminating the need for nightly batch jobs.
-- **State Management:** The system maintains the "Current State of the Market" in memory, rather than storing a historical archive on disk.
+- **Compute Side**: Apache Spark processes ~300 msg/sec of order book updates with vectorized HOF, avoiding unnecessary shuffles.
+- **Serving Side**: Redis (in-memory KV) and Go gRPC API serve clients in milliseconds, not blocked by Spark's micro-batch latency.
+- **Bridge**: Spark writes both an `HSET` (state snapshot) and `PUBLISH` (event notification) within the same Redis pipeline, ensuring atomic-ish state updates.
 
 ### 3. Infrastructure as Code (IaC)
 
-The entire production environment is provisioned automatically using **Terraform**.
+The deployment environment is provisioned via **Terraform**.
 
-- **Dynamic Provisioning:** Automates the creation of AWS EC2 instances (`m5.xlarge`) and security groups.
-- **Bootstrap Strategy:** Uses `user_data` scripts to install Docker, clone the repository, and launch the distributed cluster on boot, ensuring reproducible deployments.
-- ***
+- **Single-Node Deployment**: Provisions an `m5.xlarge` EC2 instance with security groups and pulls the full docker-compose stack via `user_data` bootstrap.
+- **Note**: This is a simplified deployment intended for demo / single-environment use. Production-grade improvements (Packer-baked AMIs, custom VPC, modularization, S3 backend for state, managed services like MSK / ElastiCache) are documented as future work.
+
+---
 
 ## ⚙️ Deep Dive: Distributed Parallelism
 
-One of the core engineering challenges in HFT is processing massive data volumes without losing the strict chronological order of trades. QuantCore solves this using a **Partition-Aware Streaming Strategy** scaled for the Top 30 market assets.
+A core engineering challenge in market data processing is achieving high throughput while preserving strict per-symbol chronological order. QuantCore solves this with a **Partition-Aware Streaming Strategy** scaled across 30 symbols.
 
 ### 1. Horizontal Ingestion Sharding
 
-To overcome the Global Interpreter Lock (GIL) and WebSocket limits of a single Python process, the ingestion layer is horizontally scaled.
+A single Python producer cannot subscribe to all 30 WebSocket streams reliably (Binance enforces a per-connection subscription limit). The ingestion layer is therefore horizontally sharded:
 
-- **Sharding Strategy:** The system launches **10 parallel producer instances**, each responsible for a distinct slice of the symbol universe (e.g., Shard 0 handles BTC/ETH, Shard 1 handles SOL/ADA).
-- **Concurrency:** This enables parallel network I/O and JSON parsing across multiple CPU cores before data even reaches Kafka.
+- **Strategy**: 10 producer processes launched via `run.sh`, each receiving a `SHARD_ID` env var that maps to a slice of the symbol universe (`SYMBOLS[start:end]` via `math.ceil`).
+- **Effect**: Parallel WebSocket I/O and JSON parsing across multiple processes before data reaches Kafka.
 
-### 2. The Buffer Lanes (30 Kafka Partitions)
+### 2. Kafka Partitioning by Symbol Key
 
-The **Kafka Broker** routes messages using a consistent hashing algorithm on the Symbol key.
+Kafka routes messages using consistent hashing on the `symbol` key:
 
-- **Strict Ordering:** All updates for a specific symbol (e.g., `BTCUSDT`) are guaranteed to land in the **same partition**.
-- **Load Balancing:** With **30 partitions** enabled, the system provides a dedicated logical lane for each of the Top 30 assets, preventing "noisy neighbor" latency spikes.
+- **Strict Per-Symbol Ordering**: All updates for `BTCUSDT` land in the same partition, processed sequentially by the same consumer.
+- **Concurrency**: 30 partitions provide one logical lane per asset, enabling Spark to process all symbols in parallel without cross-symbol contention.
 
-### 3. Vertical Scaling (Spark Executors)
+### 3. Spark Resource Alignment (2 Workers × 15 Cores = 30 Cores)
 
-The system simulates a high-performance cluster by vertically scaling **Spark Executors** to **30 Logical Cores** (15 per Worker Node).
+Spark resources are deliberately tuned to match the Kafka partition count for **1:1 partition-to-core mapping**:
 
-- **1:1 Concurrency:** By matching **30 Kafka Partitions** with **30 Spark Cores**, the system achieves perfect parallelism.
-- **Result:** No task serialization. BTC processing never queues behind ETH processing, maintaining sub-300ms latency even under high load.
+- **30 partitions × 30 cores** = no task queueing, every partition has a dedicated processing slot.
+- **2 workers** for fault isolation: a single worker failure leaves the system at 50% capacity instead of full outage.
+- **15 cores per executor** intentionally exceeds Spark's official 3-5 cores/executor guidance. That guidance applies to HDFS / S3 workloads where NameNode metadata coordination becomes a bottleneck above ~5 concurrent I/O threads. Since QuantCore uses Kafka (per-partition independent threads) and Redis (in-memory + pipelined writes), neither bottleneck applies.
 
 ---
 
 ## 🧠 System Design Decisions
 
-### 1. Why Redis? (In-Memory vs Disk)
+### 1. Why Higher-Order Functions Instead of `explode + groupBy`?
 
-For a real-time ticker, **Latency** is the primary constraint.
+The naive approach to summing bid/ask volumes would be `explode(bids) → groupBy(symbol) → sum(qty)`. This triggers a **Spark shuffle** — moving data across executors over the network — which is one of the most expensive operations in distributed processing.
 
-- **Redis (RAM):** Provides **~200µs** read latency via persistent TCP sockets. Ideal for the "Current State" scoreboard pattern.
-- **Rejection of Disk DBs:** Traditional databases (Postgres/DynamoDB) were rejected for the hot path because the **5-10ms latency** introduced by disk I/O and HTTP overhead is unacceptable for high-frequency signal distribution.
+QuantCore uses **Spark SQL Higher-Order Functions** (`aggregate` + `transform`) to compute volume sums **within a single row**, since each Kafka message already contains a self-contained order book snapshot. This eliminates the shuffle entirely. The HOF approach also avoids JVM↔Python serialization overhead inherent to Python UDFs.
 
-### 2. Why gRPC instead of REST?
+### 2. Why Driver-Side Dict Dedup Instead of `groupBy().agg(last())`?
 
-The consumption pattern for market data is **Streaming**, not Request-Response.
+When Spark falls behind the producer (e.g., during market spikes), a single micro-batch may contain multiple updates for the same symbol. After Spark's parallel computation and `collect()` to the driver, the order is no longer guaranteed, leading to a potential **ordering bug** where stale OBI values overwrite newer ones in Redis.
 
-- **REST:** Clients must poll (`GET /price`) repeatedly. This creates "Thundering Herd" problems and wastes bandwidth on HTTP headers.
-- **gRPC:** Allows for **Bi-Directional Streaming**. The client connects once, and the server pushes binary **Protobuf** updates continuously. This reduces payload size by ~60% and CPU usage for parsing.
+The natural fix would be `groupBy(symbol).agg(last(OBI))` — but this triggers another shuffle. Since the post-aggregation dataset is small (~30-150 rows) and already collected to the driver, an **in-memory Python dict on the Spark driver** dedups in O(n) without invoking Spark's distributed execution at all.
 
-### 3. Why Kafka?
+This reflects a broader principle: **distributed tools have fixed coordination overhead; for small datasets, single-machine solutions can outperform them**.
 
-Acts as the **Shock Absorber** between the volatile data source (Binance) and the processing engine (Spark).
+Measured impact (10K+ batches): Redis writes per batch reduced from 108 to 26 rows (-76%); Spark-side latency p95 reduced 32% (1472ms → 1008ms).
 
-- **Backpressure:** Prevents the ingestion layer from crashing if the compute layer slows down during market spikes.
-- **Parallelism:** Hashes symbols to specific partitions, allowing Spark workers to process BTC and ETH in parallel without race conditions.
+### 3. Why Event-Driven Pub/Sub Instead of Polling?
+
+The original gRPC server polled Redis every 500ms (`HGETALL` + `stream.Send` + `sleep`). Even though the API surface was streaming, the internal polling introduced an average **250ms artificial staleness** (half of the polling interval) plus tail-latency accumulation when polling ticks misaligned with Spark batch ticks.
+
+The refactor uses **Redis Pub/Sub**: Spark writes to Redis and `PUBLISH`es to `market_updates_channel` in the same pipeline; the gRPC server `SUBSCRIBE`s and pushes to clients on every notification.
+
+Measured impact (80K+ messages, two-layer latency decomposition):
+
+| Layer                         | Polling                    | Event-Driven           | Improvement     |
+| ----------------------------- | -------------------------- | ---------------------- | --------------- |
+| Spark side (control variable) | p50 698ms                  | p50 674ms              | unchanged ✓     |
+| **Server side (the win)**     | **p50 321ms / p99 1616ms** | **p50 5ms / p99 24ms** | **-98% / -99%** |
+| End-to-end                    | p50 1014ms / p99 2506ms    | p50 681ms / p99 1219ms | -33% / -51%     |
+
+### 4. Why gRPC Instead of REST?
+
+Market data consumption is fundamentally **streaming**, not request-response.
+
+- **REST**: Clients must repeatedly poll, creating connection overhead, redundant headers, and bandwidth waste on JSON's verbose encoding.
+- **gRPC**: HTTP/2 multiplexing with **server-side streaming** — clients subscribe once, the server pushes continuously. **Protobuf binary encoding reduces payload size by 46%** (measured: 1169B → 630B per `MarketUpdate`) compared to equivalent JSON.
+
+### 5. Why Redis Instead of a Disk Database?
+
+For real-time serving, latency is the primary constraint.
+
+- **Redis (RAM)**: Sub-millisecond reads, hash data structure maps cleanly to symbol → metric lookups, and Pub/Sub provides a natural event notification primitive.
+- **Disk databases** (Postgres, DynamoDB): Typically tens-of-milliseconds latency due to disk I/O and network/HTTP overhead — unacceptable for streaming market signals.
+
+### 6. Why Kafka?
+
+Kafka acts as the **shock absorber** between the volatile data source and the processing engine:
+
+- **Backpressure**: Decouples ingestion speed from compute speed. Producer doesn't crash if Spark slows down during market spikes.
+- **Replay**: As an immutable log, Kafka enables historical reprocessing simply by spawning a new consumer group from `offset 0` — the foundation of Kappa architecture.
+- **Per-Symbol Ordering**: Hash partitioning by symbol ensures all `BTCUSDT` events land in the same partition, processed in strict order by a single consumer.
 
 ---
 
-## 🛠️ Installation & Setup (local)
+## 🛠️ Installation & Setup (Local)
 
 ### Prerequisites
 
@@ -211,7 +250,7 @@ go run client/main.go
 
 ## 🛠️ Installation & Setup (Cloud)
 
-### Option B: Cloud Deployment (AWS + Terraform)
+### Cloud Deployment (AWS + Terraform)
 
 Deploy the entire stack to a dedicated AWS EC2 instance automatically.
 
@@ -240,6 +279,7 @@ Deploy the entire stack to a dedicated AWS EC2 instance automatically.
    ```
 
 4. **Teardown:**
+
    ```bash
    terraform destroy
    ```
@@ -253,11 +293,11 @@ Deploy the entire stack to a dedicated AWS EC2 instance automatically.
 ├── api/                        # Serving Layer (Go gRPC)
 │   ├── client/                 # Test gRPC Client
 │   ├── proto/                  # Protobuf Contracts
-│   ├── main.go                 # Server Entrypoint
+│   └── main.go                 # Server Entrypoint
 ├── infra/                      # Infrastructure as Code
 │   └── main.tf                 # Terraform AWS Definition
 ├── ingestion/                  # Ingestion Layer (Python)
-│   └── producer.py             # Binance WebSocket -> Kafka
+│   ├── producer.py             # Binance WebSocket -> Kafka
 │   └── run.sh                  # Helper script to launch sharded producers
 ├── stream/                     # Compute Layer (PySpark)
 │   └── stream_processor.py     # Kafka -> OBI Math -> Redis
